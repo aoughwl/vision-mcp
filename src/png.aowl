@@ -1,0 +1,166 @@
+## png - PNG decode/encode on top of the from-scratch zlib. 8-bit and 16-bit grey, grey+alpha,
+## RGB, RGBA, and palette images (1/2/4/8-bit); non-interlaced only. Everything is expanded to RGBA.
+import zlib
+
+type
+  Image* = object
+    w*: int
+    h*: int
+    data*: string   ## w*h*4 bytes, RGBA
+
+proc be32(s: string; p: int): int =
+  (ord(s[p]) shl 24) or (ord(s[p + 1]) shl 16) or (ord(s[p + 2]) shl 8) or ord(s[p + 3])
+
+proc decodePng*(buf: string; img: var Image): string =
+  ## Returns "" on success, else a message.
+  if buf.len < 33 or ord(buf[0]) != 0x89 or buf[1] != 'P' or buf[2] != 'N' or buf[3] != 'G':
+    return "not a PNG"
+  var p = 8
+  var w = 0
+  var h = 0
+  var depth = 0
+  var ctype = 0
+  var interlace = 0
+  var plte = ""
+  var trns = ""
+  var idat = ""
+  while p + 8 <= buf.len:
+    let len = be32(buf, p)
+    let typ = buf.substr(p + 4, p + 7)
+    if p + 12 + len > buf.len: return "truncated PNG chunk " & typ
+    let body = buf.substr(p + 8, p + 7 + len)
+    if typ == "IHDR":
+      w = be32(body, 0)
+      h = be32(body, 4)
+      depth = ord(body[8])
+      ctype = ord(body[9])
+      interlace = ord(body[12])
+    elif typ == "PLTE": plte = body
+    elif typ == "tRNS": trns = body
+    elif typ == "IDAT": idat.add body
+    elif typ == "IEND": break
+    p += 12 + len
+  if w <= 0 or h <= 0 or w > 32768 or h > 32768: return "bad PNG dimensions"
+  if interlace != 0: return "interlaced PNG is not supported"
+  var ch = 0
+  if ctype == 0: ch = 1
+  elif ctype == 2: ch = 3
+  elif ctype == 3: ch = 1
+  elif ctype == 4: ch = 2
+  elif ctype == 6: ch = 4
+  else: return "bad PNG colour type"
+  if depth != 1 and depth != 2 and depth != 4 and depth != 8 and depth != 16: return "bad PNG bit depth"
+  var bpp = (ch * depth) div 8
+  if bpp < 1: bpp = 1
+  let stride = (w * ch * depth + 7) div 8
+  let z = zlibDecompress(idat, (stride + 1) * h + 16)
+  if z.status != zOk: return "PNG image data is corrupt (" & $z.status & ")"
+  let raw = z.data
+  if raw.len < (stride + 1) * h: return "PNG image data is too short"
+  var px = newString(stride * h)
+  var y = 0
+  while y < h:
+    let f = ord(raw[y * (stride + 1)])
+    let src = y * (stride + 1) + 1
+    let dst = y * stride
+    var x = 0
+    while x < stride:
+      var a = 0
+      var b = 0
+      var c = 0
+      if x >= bpp: a = ord(px[dst + x - bpp])
+      if y > 0: b = ord(px[dst - stride + x])
+      if x >= bpp and y > 0: c = ord(px[dst - stride + x - bpp])
+      var v = ord(raw[src + x])
+      if f == 1: v += a
+      elif f == 2: v += b
+      elif f == 3: v += (a + b) shr 1
+      elif f == 4:
+        let pa = abs(b - c)
+        let pb = abs(a - c)
+        let pc = abs(a + b - 2 * c)
+        if pa <= pb and pa <= pc: v += a
+        elif pb <= pc: v += b
+        else: v += c
+      elif f != 0: return "bad PNG filter"
+      px[dst + x] = char(v and 255)
+      inc x
+    inc y
+  var outp = newString(w * h * 4)
+  let bytesPer = depth div 8   # 0 for sub-byte depths
+  y = 0
+  while y < h:
+    let row = y * stride
+    var x = 0
+    while x < w:
+      let o = (y * w + x) * 4
+      var r = 0
+      var g = 0
+      var bl = 0
+      var al = 255
+      if ctype == 6:
+        let q = row + x * 4 * bytesPer
+        r = ord(px[q]); g = ord(px[q + bytesPer]); bl = ord(px[q + 2 * bytesPer]); al = ord(px[q + 3 * bytesPer])
+      elif ctype == 2:
+        let q = row + x * 3 * bytesPer
+        r = ord(px[q]); g = ord(px[q + bytesPer]); bl = ord(px[q + 2 * bytesPer])
+      elif ctype == 4:
+        let q = row + x * 2 * bytesPer
+        r = ord(px[q]); g = r; bl = r; al = ord(px[q + bytesPer])
+      else:
+        var s = 0
+        if depth == 8: s = ord(px[row + x])
+        elif depth == 16: s = ord(px[row + x * 2])
+        else:
+          let bit = x * depth
+          s = (ord(px[row + (bit shr 3)]) shr (8 - depth - (bit and 7))) and ((1 shl depth) - 1)
+        if ctype == 0:
+          if depth < 8: s = (s * 255) div ((1 shl depth) - 1)
+          r = s; g = s; bl = s
+        else:
+          if s * 3 + 2 >= plte.len: return "PNG palette index out of range"
+          r = ord(plte[s * 3]); g = ord(plte[s * 3 + 1]); bl = ord(plte[s * 3 + 2])
+          if s < trns.len: al = ord(trns[s])
+      outp[o] = char(r)
+      outp[o + 1] = char(g)
+      outp[o + 2] = char(bl)
+      outp[o + 3] = char(al)
+      inc x
+    inc y
+  img = Image(w: w, h: h, data: outp)
+  ""
+
+proc chunk(typ, body: string): string =
+  result = ""
+  let n = body.len
+  result.add char((n shr 24) and 255)
+  result.add char((n shr 16) and 255)
+  result.add char((n shr 8) and 255)
+  result.add char(n and 255)
+  result.add typ
+  result.add body
+  let c = int(crc32(typ & body))
+  result.add char((c shr 24) and 255)
+  result.add char((c shr 16) and 255)
+  result.add char((c shr 8) and 255)
+  result.add char(c and 255)
+
+proc encodePng*(w, h: int; rgba: string): string =
+  ## RGBA 8-bit PNG (filter 0, zlib level 6).
+  var ihdr = ""
+  ihdr.add char((w shr 24) and 255); ihdr.add char((w shr 16) and 255); ihdr.add char((w shr 8) and 255); ihdr.add char(w and 255)
+  ihdr.add char((h shr 24) and 255); ihdr.add char((h shr 16) and 255); ihdr.add char((h shr 8) and 255); ihdr.add char(h and 255)
+  ihdr.add char(8); ihdr.add char(6); ihdr.add char(0); ihdr.add char(0); ihdr.add char(0)
+  var raw = newString(h * (w * 4 + 1))
+  var y = 0
+  while y < h:
+    let o = y * (w * 4 + 1)
+    raw[o] = char(0)
+    var x = 0
+    while x < w * 4:
+      raw[o + 1 + x] = rgba[y * w * 4 + x]
+      inc x
+    inc y
+  var sig = ""
+  sig.add char(0x89); sig.add "PNG"; sig.add char(13); sig.add char(10); sig.add char(26); sig.add char(10)
+  sig & chunk("IHDR", ihdr) & chunk("IDAT", zlibCompress(raw, 6)) & chunk("IEND", "")

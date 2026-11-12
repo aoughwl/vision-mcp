@@ -1,0 +1,287 @@
+## imgdiff - non-AI pixel comparison of two images. PNG is decoded natively; JPG/GIF/BMP/TIFF
+## are converted to PNG first through Windows PowerShell + System.Drawing.
+import std/[syncio, os, osproc, math]
+import jsonref
+import png
+
+type
+  Rect* = object
+    x*, y*, w*, h*: int
+
+  DiffOpts* = object
+    tolerance*: int
+    ignore*: seq[Rect]
+    gridCols*: int
+    gridRows*: int
+    failOnSizeMismatch*: bool
+    output*: string
+    maxRegions*: int
+
+var convCounter = 0
+
+proc readBytes(path: string; data: var string): bool =
+  data = ""
+  try:
+    data = readFile(path)
+    result = true
+  except:
+    result = false
+
+proc delFile*(path: string) =
+  ## Best-effort delete (Windows `del`), used for our own temp and flag files.
+  if fileExists(path):
+    try:
+      discard execCmdEx("cmd /c del /q \"" & path & "\"")
+    except:
+      discard
+
+proc loadImage*(path: string; img: var Image): string =
+  ## Returns "" on success, else an error message.
+  var data = ""
+  if not readBytes(path, data): return "cannot read " & path
+  if data.len > 8 and ord(data[0]) == 0x89 and data[1] == 'P':
+    return decodePng(data, img)
+  # anything else System.Drawing understands -> temp PNG
+  inc convCounter
+  let tmp = getTempDir() & "/visionmcp-conv-" & $convCounter & "-" & $data.len & ".png"
+  var inP = path
+  var outP = tmp
+  var cmd = "powershell -NoProfile -NonInteractive -Command \"Add-Type -AssemblyName System.Drawing; $i=[System.Drawing.Image]::FromFile('"
+  for c in inP:
+    if c == '\'': cmd.add "''"
+    else: cmd.add c
+  cmd.add "'); $b=New-Object System.Drawing.Bitmap($i); $b.Save('" & outP & "',[System.Drawing.Imaging.ImageFormat]::Png); $b.Dispose(); $i.Dispose()\""
+  var code = 1
+  try:
+    let r = execCmdEx(cmd)
+    code = r[1]
+  except:
+    code = 1
+  var conv = ""
+  if code != 0 or not readBytes(tmp, conv):
+    return "cannot decode " & path & " (not a PNG, and the System.Drawing conversion failed)"
+  delFile(tmp)
+  decodePng(conv, img)
+
+proc fmtF(x: float; decimals: int): string =
+  var scale = 1
+  var i = 0
+  while i < decimals:
+    scale *= 10
+    inc i
+  let v = int(x * float(scale) + 0.5)
+  var f = $(v mod scale)
+  while f.len < decimals: f = "0" & f
+  $(v div scale) & "." & f
+
+proc jf(x: float; decimals = 4): JsonValue = newJRawNumber(fmtF(x, decimals))
+proc ji(x: int): JsonValue = newJInt(int64(x))
+
+proc diffImages*(pa, pb: string; o: DiffOpts; res: var JsonValue): string =
+  ## Returns "" on success (res filled) or an error message.
+  var A = Image(w: 0, h: 0, data: "")
+  var B = Image(w: 0, h: 0, data: "")
+  var e = loadImage(pa, A)
+  if e.len > 0: return e
+  e = loadImage(pb, B)
+  if e.len > 0: return e
+  let mismatch = A.w != B.w or A.h != B.h
+  if mismatch and o.failOnSizeMismatch:
+    return "sizes differ: " & $A.w & "x" & $A.h & " vs " & $B.w & "x" & $B.h
+  let w = if A.w < B.w: A.w else: B.w
+  let h = if A.h < B.h: A.h else: B.h
+  let gc = if o.gridCols > 0: o.gridCols else: 16
+  let gr = if o.gridRows > 0: o.gridRows else: 9
+  let tol = o.tolerance
+  var cell = newSeq[int](gc * gr)
+  var cellN = newSeq[int](gc * gr)
+  var outp = newString(w * h * 4)
+  var diff = 0
+  var compared = 0
+  var sumR = 0
+  var sumG = 0
+  var sumB = 0
+  var sumSq = 0
+  var maxD = 0
+  var alphaDiff = 0
+  var x0 = 1000000000
+  var y0 = 1000000000
+  var x1 = -1
+  var y1 = -1
+  var y = 0
+  while y < h:
+    var x = 0
+    while x < w:
+      let ia = (y * A.w + x) * 4
+      let ib = (y * B.w + x) * 4
+      let oo = (y * w + x) * 4
+      var cx = x * gc div w
+      if cx >= gc: cx = gc - 1
+      var cy = y * gr div h
+      if cy >= gr: cy = gr - 1
+      let gi = cx + cy * gc
+      var skip = false
+      for r in o.ignore:
+        if x >= r.x and x < r.x + r.w and y >= r.y and y < r.y + r.h: skip = true
+      if skip:
+        outp[oo] = char(40); outp[oo + 1] = char(40); outp[oo + 2] = char(40); outp[oo + 3] = char(255)
+      else:
+        inc compared
+        inc cellN[gi]
+        let dr = abs(ord(A.data[ia]) - ord(B.data[ib]))
+        let dg = abs(ord(A.data[ia + 1]) - ord(B.data[ib + 1]))
+        let db = abs(ord(A.data[ia + 2]) - ord(B.data[ib + 2]))
+        let da = abs(ord(A.data[ia + 3]) - ord(B.data[ib + 3]))
+        var m = dr
+        if dg > m: m = dg
+        if db > m: m = db
+        if da > m: m = da
+        sumR += dr; sumG += dg; sumB += db
+        sumSq += dr * dr + dg * dg + db * db
+        if m > maxD: maxD = m
+        if m > tol:
+          inc diff
+          inc cell[gi]
+          if da > tol: inc alphaDiff
+          if x < x0: x0 = x
+          if x > x1: x1 = x
+          if y < y0: y0 = y
+          if y > y1: y1 = y
+          outp[oo] = char(255); outp[oo + 1] = char(0); outp[oo + 2] = char(0); outp[oo + 3] = char(255)
+        else:
+          let g = (ord(A.data[ia]) + ord(A.data[ia + 1]) + ord(A.data[ia + 2])) div 3 * 35 div 100
+          outp[oo] = char(g); outp[oo + 1] = char(g); outp[oo + 2] = char(g); outp[oo + 3] = char(255)
+      inc x
+    inc y
+  # clusters of hot grid cells (8-connected flood fill)
+  var seen = newSeq[bool](gc * gr)
+  var cl: seq[(int, JsonValue)] = @[]
+  var ci = 0
+  while ci < gc * gr:
+    if not seen[ci] and cellN[ci] > 0 and cell[ci] * 1000 > cellN[ci] * 5:
+      var stack: seq[int] = @[ci]
+      seen[ci] = true
+      var cx0 = gc
+      var cy0 = gr
+      var cx1 = -1
+      var cy1 = -1
+      var px = 0
+      while stack.len > 0:
+        let c = stack[stack.len - 1]
+        stack.setLen(stack.len - 1)
+        let cx = c mod gc
+        let cy = c div gc
+        px += cell[c]
+        if cx < cx0: cx0 = cx
+        if cx > cx1: cx1 = cx
+        if cy < cy0: cy0 = cy
+        if cy > cy1: cy1 = cy
+        var dy = -1
+        while dy <= 1:
+          var dx = -1
+          while dx <= 1:
+            let nx = cx + dx
+            let ny = cy + dy
+            if nx >= 0 and ny >= 0 and nx < gc and ny < gr:
+              let n = nx + ny * gc
+              if not seen[n] and cellN[n] > 0 and cell[n] * 1000 > cellN[n] * 5:
+                seen[n] = true
+                stack.add n
+            inc dx
+          inc dy
+      let rx = cx0 * w div gc
+      let ry = cy0 * h div gr
+      let reg = newJObject()
+      reg["x"] = ji(rx)
+      reg["y"] = ji(ry)
+      reg["w"] = ji((cx1 + 1) * w div gc - rx)
+      reg["h"] = ji((cy1 + 1) * h div gr - ry)
+      reg["diff_pixels"] = ji(px)
+      cl.add((px, reg))
+    inc ci
+  # largest first: repeatedly pick the biggest unused cluster (few clusters, no element swaps)
+  let regions = newJArray()
+  let maxReg = if o.maxRegions > 0: o.maxRegions else: 8
+  var used = newSeq[bool](cl.len)
+  var picked = 0
+  while picked < maxReg and picked < cl.len:
+    var best = -1
+    var k = 0
+    while k < cl.len:
+      if not used[k] and (best < 0 or cl[k][0] > cl[best][0]): best = k
+      inc k
+    used[best] = true
+    regions.add cl[best][1]
+    inc picked
+  var heat = newJArray()
+  var rr = 0
+  while rr < gr:
+    var line = ""
+    var cc = 0
+    while cc < gc:
+      let k = rr * gc + cc
+      var f = 0.0
+      if cellN[k] > 0: f = float(cell[k]) / float(cellN[k])
+      if f == 0.0: line.add '.'
+      elif f < 0.01: line.add '1'
+      elif f < 0.05: line.add '2'
+      elif f < 0.2: line.add '3'
+      elif f < 0.5: line.add '5'
+      else: line.add '9'
+      inc cc
+    heat.add newJString(line)
+    inc rr
+  var outPath = ""
+  if o.output.len > 0:
+    try:
+      writeFile(o.output, encodePng(w, h, outp))
+      outPath = o.output
+    except:
+      return "cannot write the diff image to " & o.output
+  let pct = if compared > 0: float(diff) * 100.0 / float(compared) else: 0.0
+  let denom = float(if compared > 0: compared else: 1)
+  let mse = if compared > 0: float(sumSq) / (denom * 3.0) else: 0.0
+  var summary = ""
+  if diff == 0 and not mismatch: summary = "IDENTICAL"
+  else: summary = fmtF(pct, 4) & "% of pixels differ (" & $diff & " of " & $compared & ")"
+  if mismatch:
+    summary.add "; WARNING sizes differ (" & $A.w & "x" & $A.h & " vs " & $B.w & "x" & $B.h & "), compared the overlapping " & $w & "x" & $h & " top-left area"
+  let r = newJObject()
+  r["summary"] = newJString(summary)
+  r["identical"] = newJBool(diff == 0 and not mismatch)
+  r["percent_different"] = jf(pct)
+  r["different_pixels"] = ji(diff)
+  r["compared_pixels"] = ji(compared)
+  let sa = newJObject()
+  sa["w"] = ji(A.w); sa["h"] = ji(A.h)
+  r["a_size"] = sa
+  let sb = newJObject()
+  sb["w"] = ji(B.w); sb["h"] = ji(B.h)
+  r["b_size"] = sb
+  r["size_mismatch"] = newJBool(mismatch)
+  r["alpha_differences"] = ji(alphaDiff)
+  r["max_channel_diff"] = ji(maxD)
+  let mean = newJArray()
+  mean.add jf(float(sumR) / denom, 3)
+  mean.add jf(float(sumG) / denom, 3)
+  mean.add jf(float(sumB) / denom, 3)
+  r["mean_abs_diff_rgb"] = mean
+  r["percent_mean_error"] = jf(float(sumR + sumG + sumB) / denom / 3.0 / 255.0 * 100.0)
+  if mse == 0.0: r["psnr_db"] = newJString("inf")
+  else: r["psnr_db"] = jf(10.0 * log10(255.0 * 255.0 / mse), 2)
+  if diff > 0:
+    let bb = newJObject()
+    bb["x"] = ji(x0); bb["y"] = ji(y0); bb["w"] = ji(x1 - x0 + 1); bb["h"] = ji(y1 - y0 + 1)
+    r["bounding_box"] = bb
+  else:
+    r["bounding_box"] = newJNull()
+  r["regions"] = regions
+  let hm = newJObject()
+  hm["cols"] = ji(gc)
+  hm["rows"] = ji(gr)
+  hm["legend"] = newJString(". none, 1 <1%, 2 <5%, 3 <20%, 5 <50%, 9 more of the cell differs")
+  hm["rows_text"] = heat
+  r["heatmap"] = hm
+  if outPath.len > 0: r["diff_image"] = newJString(outPath)
+  res = r
+  ""

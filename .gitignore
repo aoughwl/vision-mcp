@@ -1,5 +1,6 @@
-node_modules/
-*.log
+bin/
+nimcache/
+*.exe
 *.png
 .env
 testflag

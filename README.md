@@ -5,7 +5,10 @@ Screenshots and images are sent to OpenAI with a prompt and only the text answer
 companion hook can switch off the agent's own image reading entirely, and a non-AI pixel diff
 answers "did anything change?" for free.
 
-One dependency-free Node 18+ file per concern. Stdio MCP (JSON-RPC 2.0, protocol `2024-11-05`).
+Written in **aowl** (built with aowlmony) on the aoughwl stack: [`mcp`](https://github.com/aoughwl/mcp)
+for the protocol, [`openai`](https://github.com/aoughwl/openai) for the API call,
+[`requests`](https://github.com/aoughwl/requests) on its native `tcp → net → tls` backend, `jsonref`, and a
+from-scratch `zlib` for PNG. No Node, no curl, no C libraries beyond OpenSSL 3.
 
 ## Tools
 
@@ -19,44 +22,54 @@ One dependency-free Node 18+ file per concern. Stdio MCP (JSON-RPC 2.0, protocol
 Suggested loop for UI work: `image_diff` against a baseline first (free, instant). Only when something
 changed, ask `vision_describe` about the changed region or the diff image.
 
+## Build
+
+Needs aowlmony with aowlsem + aowlhexer, and OpenSSL 3 at runtime. The dependencies are path deps in
+`mony.toml`, expected as siblings of this folder (`../aowlmcp` = aoughwl/mcp, `../aoughwl-git/{openai,tcp,net,tls}`,
+`../jsonref`, `../requests/nimony`, `../zlib`); edit the paths to match your checkout.
+
+```
+aowlmony build src/vision.aowl -o bin/vision-mcp.exe
+aowlmony build src/block-images.aowl -o bin/block-images.exe
+```
+
 ## Install (Claude Code)
 
 ```
-claude mcp add --scope user openai-vision -e OPENAI_API_KEY=sk-... -- node /path/to/vision-mcp.js
+claude mcp add --scope user openai-vision -e OPENAI_API_KEY=sk-... -- /path/to/bin/vision-mcp.exe
 ```
 
 The key lives only in the MCP server's environment (Claude's user config). It is never written to
-this repo or logged. Optional environment: `OPENAI_VISION_MODEL` (default `gpt-5.4`),
-`OPENAI_BASE_URL`, `OPENAI_VISION_FLAG`.
+this repo or logged. Optional environment: `OPENAI_VISION_MODEL` (default `gpt-5.4`), `OPENAI_BASE_URL`,
+`OPENAI_VISION_FLAG`.
 
 ### Disable Claude's own image reading
 
-`block-claude-images.js` is a `PreToolUse` hook. While the flag file `~/.claude/openai-vision.enabled`
-exists it refuses `Read` of image files (png, jpg, gif, webp, bmp, tiff, ico, heic, avif) and any
-MCP screenshot-style tool (names containing screenshot, computer, zoom, gif_creator,
-take_snapshot), telling the agent to use `vision_describe` instead. Add to `~/.claude/settings.json`:
+`block-images` is a `PreToolUse` hook. While the flag file `~/.claude/openai-vision.enabled` exists it
+refuses `Read` of image files (png, jpg, gif, webp, bmp, tiff, ico, heic, avif) and any MCP
+screenshot-style tool (names containing screenshot, computer, zoom, gif_creator, take_snapshot),
+telling the agent to use `vision_describe` instead. Add to `~/.claude/settings.json`:
 
 ```json
 {
   "hooks": {
     "PreToolUse": [
       { "matcher": "Read|mcp__.*",
-        "hooks": [ { "type": "command", "command": "node /path/to/block-claude-images.js" } ] }
+        "hooks": [ { "type": "command", "command": "/path/to/bin/block-images.exe" } ] }
     ]
   }
 }
 ```
 
-Then `vision_claude_images {enabled: true}` creates the flag (blocked) and `{enabled: false}` removes
-it (allowed). It takes effect immediately, no restart.
+Then `vision_claude_images {enabled: true}` creates the flag (blocked) and `{enabled: false}` removes it
+(allowed). It takes effect immediately, no restart.
 
-Limits: an image pasted or dragged straight into the prompt is already in the conversation before
-any hook runs, and built-in tools that return image content on their own cannot be intercepted
-generically.
+Limits: an image pasted or dragged straight into the prompt is already in the conversation before any
+hook runs, and built-in tools that return image content on their own cannot be intercepted generically.
 
 ## Notes
 
 - Images over 20 MB are refused. Costs are OpenAI tokens at the chosen model; `detail: low` is cheapest.
 - `image_diff` compares the overlapping top-left area when sizes differ and says so (or fails with
-  `size_mismatch: "fail"`).
+  `size_mismatch: "fail"`). Interlaced PNGs are not supported.
 - Treat any API key pasted into a chat as exposed and rotate it when convenient.

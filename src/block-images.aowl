@@ -1,0 +1,58 @@
+## block-images - a Claude Code PreToolUse hook. While the flag file exists (see vision_claude_images)
+## it refuses Claude's own image reading: Read of image files and screenshot-style MCP tools.
+## Reads the hook JSON on stdin; exit code 2 + a message on stderr blocks the call.
+import std/[syncio, os, envvars]
+import jsonref
+
+proc lowerS(s: string): string =
+  result = ""
+  for c in s:
+    if c >= 'A' and c <= 'Z': result.add char(ord(c) + 32)
+    else: result.add c
+
+proc endsWithAny(s: string; exts: seq[string]): bool =
+  let l = lowerS(s)
+  for e in exts:
+    if l.len >= e.len and l.substr(l.len - e.len, l.len - 1) == e: return true
+  false
+
+proc hasAny(s: string; parts: seq[string]): bool =
+  let l = lowerS(s)
+  for p in parts:
+    var i = 0
+    while i + p.len <= l.len:
+      if l.substr(i, i + p.len - 1) == p: return true
+      inc i
+  false
+
+proc flagPath(): string =
+  let e = getEnv("OPENAI_VISION_FLAG")
+  if e.len > 0: return e
+  var home = getHomeDir()
+  if home.len > 0 and home[home.len - 1] != '/' and home[home.len - 1] != '\\': home.add "/"
+  home & ".claude/openai-vision.enabled"
+
+proc main() =
+  if not fileExists(flagPath()): return
+  var raw = ""
+  try:
+    raw = readAll(stdin)
+  except:
+    return
+  var err = ""
+  let ev = parseJson(raw, err)
+  if err.len > 0: return
+  let tool = ev{"tool_name"}.getStr("")
+  var why = ""
+  if tool == "Read":
+    let fp = ev{"tool_input"}{"file_path"}.getStr("")
+    if endsWithAny(fp, @[".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tif", ".tiff", ".ico", ".heic", ".avif"]):
+      why = "Read of image " & fp
+  elif tool.len > 5 and tool.substr(0, 4) == "mcp__" and not hasAny(tool, @["openai-vision"]) and
+       hasAny(tool, @["screenshot", "computer", "zoom", "gif_creator", "take_snapshot"]):
+    why = "screenshot tool " & tool
+  if why.len == 0: return
+  stderr.write "Blocked (" & why & "): Claude's own image reading is disabled while the OpenAI vision MCP is enabled. Use mcp__openai-vision__vision_describe with the image path and a specific prompt instead (vision_compare for several images). To re-allow: mcp__openai-vision__vision_claude_images {enabled:false}.\n"
+  quit(2)
+
+main()

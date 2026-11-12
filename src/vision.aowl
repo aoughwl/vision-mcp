@@ -1,0 +1,123 @@
+## vision - an MCP server that describes images through OpenAI instead of Claude reading them, plus
+## a non-AI pixel diff. Built on aoughwl/mcp, aoughwl/openai, aoughwl/requests (native TLS) and zlib.
+## Key: OPENAI_API_KEY (environment only). Model: OPENAI_VISION_MODEL (default gpt-5.4).
+import std/[syncio, os, envvars]
+import aowlmcp
+import openai
+import imgdiff
+
+const
+  DefaultModel = "gpt-5.4"
+  DefaultPrompt = "Describe this image thoroughly. Transcribe all visible text exactly, and note layout, colors, and anything that looks broken or out of place."
+
+proc fail(msg: string): JsonValue =
+  result = newJObject()
+  result["error"] = newJString(msg)
+
+proc flagPath(): string =
+  let e = getEnv("OPENAI_VISION_FLAG")
+  if e.len > 0: return e
+  var home = getHomeDir()
+  if home.len > 0 and home[home.len - 1] != '/' and home[home.len - 1] != '\\': home.add "/"
+  home & ".claude/openai-vision.enabled"
+
+proc toImage(src: string; err: var string): string =
+  ## URL / data: URI pass through; anything else is a local file -> data: URI.
+  if src.len >= 5 and src.substr(0, 4) == "data:": return src
+  if src.len >= 7 and (src.substr(0, 6) == "http://" or (src.len >= 8 and src.substr(0, 7) == "https://")): return src
+  var p = src
+  if p.len > 8 and p.substr(0, 7) == "file:///": p = p.substr(8, p.len - 1)
+  imageDataUri(p, err)
+
+proc ask(images: seq[string]; prompt, detail, model: string; maxTokens: int; effort: string): JsonValue =
+  var uris: seq[string] = @[]
+  for src in images:
+    var err = ""
+    let u = toImage(src, err)
+    if err.len > 0: return fail(err)
+    uris.add u
+  var m = model
+  if m.len == 0: m = getEnv("OPENAI_VISION_MODEL")
+  if m.len == 0: m = DefaultModel
+  let c = newOpenAI(timeoutMs = 180000)
+  let r = c.chat(m, @[userWithImages(prompt, uris, if detail.len > 0: detail else: "auto")],
+                 maxCompletionTokens = (if maxTokens > 0: maxTokens else: 4000),
+                 reasoningEffort = effort)
+  if not r.ok: return fail(r.error)
+  if r.text.len == 0: return fail("no answer (finish_reason " & r.finishReason & "); try a larger max_tokens or reasoning_effort \"low\"")
+  newJString(r.text & "\n\n[" & m & "; " & $r.usage.promptTokens & " in / " & $r.usage.completionTokens & " out tokens]")
+
+proc vision_describe(args: JsonValue): JsonValue =
+  let image = args{"image"}.getStr("")
+  if image.len == 0: return fail("missing parameter 'image'")
+  var prompt = args{"prompt"}.getStr("")
+  if prompt.len == 0: prompt = DefaultPrompt
+  ask(@[image], prompt, args{"detail"}.getStr(""), args{"model"}.getStr(""),
+      int(args{"max_tokens"}.getInt(0)), args{"reasoning_effort"}.getStr(""))
+
+proc vision_compare(args: JsonValue): JsonValue =
+  var images: seq[string] = @[]
+  for it in args{"images"}:
+    images.add it.getStr("")
+  if images.len == 0: return fail("missing parameter 'images'")
+  if images.len > 8: return fail("at most 8 images")
+  let prompt = args{"prompt"}.getStr("")
+  if prompt.len == 0: return fail("missing parameter 'prompt'")
+  ask(images, prompt, args{"detail"}.getStr(""), args{"model"}.getStr(""),
+      int(args{"max_tokens"}.getInt(0)), args{"reasoning_effort"}.getStr(""))
+
+proc image_diff(args: JsonValue): JsonValue =
+  let a = args{"a"}.getStr("")
+  let b = args{"b"}.getStr("")
+  if a.len == 0 or b.len == 0: return fail("both 'a' and 'b' are required")
+  var o = DiffOpts(tolerance: int(args{"tolerance"}.getInt(0)), ignore: @[],
+                   gridCols: int(args{"grid_cols"}.getInt(16)), gridRows: int(args{"grid_rows"}.getInt(9)),
+                   failOnSizeMismatch: args{"size_mismatch"}.getStr("crop") == "fail",
+                   output: args{"output"}.getStr(""), maxRegions: int(args{"max_regions"}.getInt(8)))
+  for r in args{"ignore"}:
+    o.ignore.add Rect(x: int(r{"x"}.getInt(0)), y: int(r{"y"}.getInt(0)),
+                      w: int(r{"w"}.getInt(0)), h: int(r{"h"}.getInt(0)))
+  var res = newJObject()
+  let e = diffImages(a, b, o, res)
+  if e.len > 0: return fail(e)
+  res
+
+proc vision_claude_images(args: JsonValue): JsonValue =
+  let f = flagPath()
+  if args.hasKey("enabled"):
+    if args{"enabled"}.getBool(false):
+      try:
+        writeFile(f, "openai-vision-mcp: Claude image reading blocked while this file exists\n")
+      except:
+        return fail("cannot write " & f)
+    else:
+      delFile(f)
+  let on = fileExists(f)
+  var model = getEnv("OPENAI_VISION_MODEL")
+  if model.len == 0: model = DefaultModel
+  newJString("Claude image reading is " & (if on: "BLOCKED (use vision_describe)" else: "ALLOWED") &
+             ". flag: " & f & ". model: " & model & ". key: " & (if getEnv("OPENAI_API_KEY").len > 0: "set" else: "MISSING") & ".")
+
+let srv = newServer("openai-vision", "0.2.0")
+
+srv.registerTool("vision_describe",
+  "Send an image (screenshot, photo, diagram) to OpenAI with a prompt and return its answer. Use this instead of reading images yourself. Ask specific questions (\"what text is in the error dialog?\", \"is the HUD overlapping the hotbar?\") for the best result.",
+  """{"type":"object","properties":{"image":{"type":"string","description":"Absolute path to a PNG/JPEG/GIF/WebP file, an http(s) URL, or a data: URI."},"prompt":{"type":"string","description":"What to find out. Default: a thorough description including all visible text."},"detail":{"type":"string","enum":["low","high","auto"],"description":"Image resolution: high for small text and dense UIs (default auto)."},"model":{"type":"string","description":"OpenAI model (default gpt-5.4, env OPENAI_VISION_MODEL)."},"max_tokens":{"type":"integer","description":"Answer cap including reasoning (default 4000)."},"reasoning_effort":{"type":"string","enum":["minimal","low","medium","high"],"description":"For reasoning models; low is faster and cheaper."}},"required":["image"],"additionalProperties":false}""",
+  vision_describe)
+
+srv.registerTool("vision_compare",
+  "Send several images (up to 8) to OpenAI in one request with a prompt, e.g. before/after screenshots or expected vs actual. Images are numbered in the order given.",
+  """{"type":"object","properties":{"images":{"type":"array","items":{"type":"string"},"minItems":1,"maxItems":8,"description":"Paths, URLs or data URIs."},"prompt":{"type":"string","description":"e.g. 'Image 1 is expected, image 2 is actual; list every visual difference.'"},"detail":{"type":"string","enum":["low","high","auto"]},"model":{"type":"string"},"max_tokens":{"type":"integer"},"reasoning_effort":{"type":"string","enum":["minimal","low","medium","high"]}},"required":["images","prompt"],"additionalProperties":false}""",
+  vision_compare)
+
+srv.registerTool("image_diff",
+  "Pixel-exact, non-AI comparison of two screenshots/images. Reports overall % of pixels that differ, mean error, PSNR, max channel delta, bounding box of all changes, the largest changed regions (x,y,w,h), and a text heatmap. Optionally writes a diff PNG (changed pixels red on a dimmed copy). Free and instant; use it first, then vision_describe on a region/diff image only if you need to know what changed. PNG natively; JPG/GIF/BMP via Windows System.Drawing.",
+  """{"type":"object","properties":{"a":{"type":"string","description":"Absolute path of the first (baseline/expected) image."},"b":{"type":"string","description":"Absolute path of the second (actual) image."},"tolerance":{"type":"integer","minimum":0,"maximum":255,"description":"Per-channel difference up to which a pixel counts as the same; 2-8 ignores compression/antialiasing noise (default 0)."},"ignore":{"type":"array","description":"Rectangles to exclude (clocks, FPS counters).","items":{"type":"object","properties":{"x":{"type":"integer"},"y":{"type":"integer"},"w":{"type":"integer"},"h":{"type":"integer"}},"required":["x","y","w","h"]}},"grid_cols":{"type":"integer","minimum":1,"maximum":64},"grid_rows":{"type":"integer","minimum":1,"maximum":64},"size_mismatch":{"type":"string","enum":["crop","fail"],"description":"If dimensions differ: compare the overlapping top-left area (default) or fail."},"output":{"type":"string","description":"Where to write the diff PNG (absolute path). Omit for stats only."},"max_regions":{"type":"integer","minimum":1,"maximum":50}},"required":["a","b"],"additionalProperties":false}""",
+  image_diff)
+
+srv.registerTool("vision_claude_images",
+  "Turn the block on Claude's own image reading on or off (or query it). While ON, the block-images hook refuses Claude's Read of image files and screenshot tools, so images must go through vision_describe. Takes effect immediately, no restart.",
+  """{"type":"object","properties":{"enabled":{"type":"boolean","description":"true: block Claude image reads; false: allow them. Omit to just report."}},"additionalProperties":false}""",
+  vision_claude_images)
+
+srv.run()

@@ -1,0 +1,10 @@
+# mony.lock — resolved dependencies. Generated; edit mony.toml instead.
+# name source url rev content
+mcp path ../aowlmcp - 8c003bd58e0cfa34157d47a364bbbc9d384625cb
+openai path ../aoughwl-git/openai - 274077f5de0d4b62b756b16b472f8f5072a7c101
+jsonref path ../jsonref - 6b9684a6180ba001ec511962985289a9c33a1651
+requests path ../requests/nimony - 775b144d244dc73586ff186d58715456cfef23c9
+tcp path ../aoughwl-git/tcp - 555818464bfa98f9179d164a6b26b8761b3736d1
+net path ../aoughwl-git/net - 990361036d3c813993bd66fbd6a73e07571e6f24
+tls path ../aoughwl-git/tls - 19b1676fc32e4b495a76662590dcfb28076a980f
+zlib path ../zlib - d60d3422f287ea34ab9f8f6e9cc29852d87020e0

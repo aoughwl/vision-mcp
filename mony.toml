@@ -1,0 +1,16 @@
+[package]
+name    = "vision-mcp"
+version = "0.2.0"
+
+[build]
+entry   = "src/vision.aowl"
+
+[deps]
+mcp = { path = "../aowlmcp" }
+openai = { path = "../aoughwl-git/openai" }
+jsonref = { path = "../jsonref" }
+requests = { path = "../requests/nimony" }
+tcp = { path = "../aoughwl-git/tcp" }
+net = { path = "../aoughwl-git/net" }
+tls = { path = "../aoughwl-git/tls" }
+zlib = { path = "../zlib" }
