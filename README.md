@@ -40,7 +40,7 @@ claude mcp add --scope user openai-vision -e OPENAI_API_KEY=sk-... -- /path/to/b
 ```
 
 The key lives only in the MCP server's environment (Claude's user config). It is never written to
-this repo or logged. Optional environment: `OPENAI_VISION_MODEL` (default `gpt-5.4`), `OPENAI_BASE_URL`,
+this repo or logged. Optional environment: `OPENAI_VISION_MODEL` (default `gpt-5.4-mini`), `OPENAI_BASE_URL`,
 `OPENAI_VISION_FLAG`.
 
 ### Disable Claude's own image reading

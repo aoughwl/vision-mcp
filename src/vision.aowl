@@ -1,13 +1,13 @@
 ## vision - an MCP server that describes images through OpenAI instead of Claude reading them, plus
 ## a non-AI pixel diff. Built on aoughwl/mcp, aoughwl/openai, aoughwl/requests (native TLS) and zlib.
-## Key: OPENAI_API_KEY (environment only). Model: OPENAI_VISION_MODEL (default gpt-5.4).
+## Key: OPENAI_API_KEY (environment only). Model: OPENAI_VISION_MODEL (default gpt-5.4-mini).
 import std/[syncio, os, envvars]
 import aowlmcp
 import openai
 import imgdiff
 
 const
-  DefaultModel = "gpt-5.4"
+  DefaultModel = "gpt-5.4-mini"
   DefaultPrompt = "Describe this image thoroughly. Transcribe all visible text exactly, and note layout, colors, and anything that looks broken or out of place."
 
 proc fail(msg: string): JsonValue =
@@ -102,7 +102,7 @@ let srv = newServer("openai-vision", "0.2.0")
 
 srv.registerTool("vision_describe",
   "Send an image (screenshot, photo, diagram) to OpenAI with a prompt and return its answer. Use this instead of reading images yourself. Ask specific questions (\"what text is in the error dialog?\", \"is the HUD overlapping the hotbar?\") for the best result.",
-  """{"type":"object","properties":{"image":{"type":"string","description":"Absolute path to a PNG/JPEG/GIF/WebP file, an http(s) URL, or a data: URI."},"prompt":{"type":"string","description":"What to find out. Default: a thorough description including all visible text."},"detail":{"type":"string","enum":["low","high","auto"],"description":"Image resolution: high for small text and dense UIs (default auto)."},"model":{"type":"string","description":"OpenAI model (default gpt-5.4, env OPENAI_VISION_MODEL)."},"max_tokens":{"type":"integer","description":"Answer cap including reasoning (default 4000)."},"reasoning_effort":{"type":"string","enum":["minimal","low","medium","high"],"description":"For reasoning models; low is faster and cheaper."}},"required":["image"],"additionalProperties":false}""",
+  """{"type":"object","properties":{"image":{"type":"string","description":"Absolute path to a PNG/JPEG/GIF/WebP file, an http(s) URL, or a data: URI."},"prompt":{"type":"string","description":"What to find out. Default: a thorough description including all visible text."},"detail":{"type":"string","enum":["low","high","auto"],"description":"Image resolution: high for small text and dense UIs (default auto)."},"model":{"type":"string","description":"OpenAI model (default gpt-5.4-mini, env OPENAI_VISION_MODEL)."},"max_tokens":{"type":"integer","description":"Answer cap including reasoning (default 4000)."},"reasoning_effort":{"type":"string","enum":["minimal","low","medium","high"],"description":"For reasoning models; low is faster and cheaper."}},"required":["image"],"additionalProperties":false}""",
   vision_describe)
 
 srv.registerTool("vision_compare",
