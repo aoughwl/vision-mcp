@@ -8,9 +8,9 @@ entry   = "src/vision.aowl"
 [deps]
 mcp = { path = "../aowlmcp" }
 openai = { path = "../aoughwl-git/openai" }
-jsonref = { path = "../jsonref" }
-requests = { path = "../requests" }
-tcp = { path = "../aoughwl-git/tcp" }
-net = { path = "../aoughwl-git/net" }
-tls = { path = "../aoughwl-git/tls" }
-zlib = { path = "../zlib" }
+jsonref = { path = "../std/jsonref" }
+requests = { path = "../std/requests" }
+tcp = { path = "../std/tcp" }
+net = { path = "../std/net" }
+tls = { path = "../std/tls" }
+zlib = { path = "../std/zlib" }

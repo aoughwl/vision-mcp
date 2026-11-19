@@ -25,8 +25,8 @@ changed, ask `vision_describe` about the changed region or the diff image.
 ## Build
 
 Needs aowlmony with aowlsem + aowlhexer, and OpenSSL 3 at runtime. The dependencies are path deps in
-`mony.toml`, expected as siblings of this folder (`../aowlmcp` = aoughwl/mcp, `../aoughwl-git/{openai,tcp,net,tls}`,
-`../jsonref`, `../requests`, `../zlib`); edit the paths to match your checkout.
+`mony.toml`, expected as siblings of this folder (`../aowlmcp` = aoughwl/mcp, `../aoughwl-git/openai`, `../std/{tcp,net,tls}`,
+`../std/{jsonref,requests,zlib}` (checkout of [aoughwl/std](https://github.com/aoughwl/std))); edit the paths to match your checkout.
 
 ```
 aowlmony build src/vision.aowl -o bin/vision-mcp.exe

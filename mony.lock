@@ -2,9 +2,9 @@
 # name source url rev content
 mcp path ../aowlmcp - 06c5db84e854c7ca988181571a14e874be0fb1f6
 openai path ../aoughwl-git/openai - 274077f5de0d4b62b756b16b472f8f5072a7c101
-jsonref path ../jsonref - 6b9684a6180ba001ec511962985289a9c33a1651
-requests path ../requests - 42fd06c7ae51bd24eec52a0c9b0e2aa7959a22c5
-tcp path ../aoughwl-git/tcp - 555818464bfa98f9179d164a6b26b8761b3736d1
-net path ../aoughwl-git/net - 990361036d3c813993bd66fbd6a73e07571e6f24
-tls path ../aoughwl-git/tls - 19b1676fc32e4b495a76662590dcfb28076a980f
-zlib path ../zlib - 7d43fada22801390f94fc270d411ff0c643409b0
+jsonref path ../std/jsonref - 6b9684a6180ba001ec511962985289a9c33a1651
+requests path ../std/requests - 42fd06c7ae51bd24eec52a0c9b0e2aa7959a22c5
+tcp path ../std/tcp - 555818464bfa98f9179d164a6b26b8761b3736d1
+net path ../std/net - 990361036d3c813993bd66fbd6a73e07571e6f24
+tls path ../std/tls - 19b1676fc32e4b495a76662590dcfb28076a980f
+zlib path ../std/zlib - 7d43fada22801390f94fc270d411ff0c643409b0
